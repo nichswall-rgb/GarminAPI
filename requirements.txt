@@ -1,0 +1,6 @@
+garminconnect==0.2.25
+garth==0.5.7
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+apscheduler==3.11.0
+pydantic-settings==2.7.1
