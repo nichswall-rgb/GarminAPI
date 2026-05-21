@@ -41,12 +41,8 @@ def get_client() -> Garmin:
 def start_login(email: str, password: str) -> dict:
     """Begin login. Returns {'mfa_required': bool}."""
     global _client
-    g = Garmin(email=email, password=password, return_on_mfa=True)
-    result1, result2 = g.login()
-    if result1 == "needs_mfa":
-        _pending["client"] = g
-        _pending["state"] = result2
-        return {"mfa_required": True}
+    g = Garmin(email=email, password=password)
+    g.login()
     g.garth.dump(_ensure_token_dir())
     with _lock:
         _client = g
