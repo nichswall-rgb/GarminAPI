@@ -43,12 +43,28 @@ def poll_once() -> dict:
         "body_battery": _safe(
             "body_battery", day, lambda: g.get_body_battery(day, day)
         ),
+        # Overnight signals for BG-confounder analysis. Each is best-effort:
+        # a watch that doesn't record one just logs and continues (_safe).
+        "hrv": _safe("hrv", day, lambda: g.get_hrv_data(day)),
+        "spo2": _safe("spo2", day, lambda: g.get_spo2_data(day)),
+        "respiration": _safe(
+            "respiration", day, lambda: g.get_respiration_data(day)
+        ),
         "activities": _safe(
             "activities",
             day,
             lambda: g.get_activities(0, settings.activities_limit),
         ),
     }
+
+    # Keep the rolling retention window trimmed.
+    try:
+        removed = db.prune(settings.retention_days)
+        if removed:
+            log.info("pruned %s snapshot rows past %s-day window",
+                     removed, settings.retention_days)
+    except Exception:  # noqa: BLE001 - pruning must never fail a poll
+        log.warning("prune failed:\n%s", traceback.format_exc())
 
     ok = sum(1 for v in results.values() if v)
     total = len(results)

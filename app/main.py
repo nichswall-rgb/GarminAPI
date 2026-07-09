@@ -97,3 +97,19 @@ def metrics_latest():
         "last_status": db.get_meta("last_status"),
         "metrics": db.get_all_snapshots(),
     }
+
+
+@app.get("/metrics/history", dependencies=[Depends(require_api_key)])
+def metrics_history(days: int = settings.retention_days):
+    """Retained overnight history for time-series analysis.
+
+    Returns a flat list of {metric, day, fetched_at, data} rows for the last
+    `days` days (clamped to the server's retention window). Instant, cached.
+    """
+    days = max(1, min(days, settings.retention_days))
+    return {
+        "last_success": db.get_meta("last_success"),
+        "last_status": db.get_meta("last_status"),
+        "days": days,
+        "snapshots": db.get_history(days),
+    }

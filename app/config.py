@@ -23,5 +23,9 @@ class Settings(BaseSettings):
     # How many recent activities to pull each poll.
     activities_limit: int = 5
 
+    # How many days of overnight history to retain (rolling window).
+    # Each metric keeps one row per day; older rows are pruned after each poll.
+    retention_days: int = 3
+
 
 settings = Settings()
