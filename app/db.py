@@ -4,6 +4,7 @@ import sqlite3
 from datetime import datetime, timezone
 from threading import Lock
 
+from .clock import local_day_offset, local_today
 from .config import settings
 
 _lock = Lock()
@@ -84,15 +85,21 @@ def get_all_snapshots() -> dict:
 
     With history retained there are now several rows per metric, so pick the
     most recent day for each so existing callers keep seeing one snapshot.
+
+    Rows dated past today are ignored. A poll that ran while the clock was
+    ahead of local time stored empty stubs under tomorrow's date, and MAX(day)
+    let those shadow real data until the date caught up.
     """
+    today = local_today()
     with _lock, _conn() as conn:
         rows = conn.execute(
             """
             SELECT metric, day, payload, fetched_at FROM snapshots
-            WHERE (metric, day) IN (
-                SELECT metric, MAX(day) FROM snapshots GROUP BY metric
+            WHERE day <= ? AND (metric, day) IN (
+                SELECT metric, MAX(day) FROM snapshots WHERE day <= ? GROUP BY metric
             )
-            """
+            """,
+            (today, today),
         ).fetchall()
     return {
         r["metric"]: {
@@ -108,16 +115,18 @@ def get_history(days: int) -> list:
     """All retained days, newest first — for overnight time-series analysis.
 
     Returns a flat list of {metric, day, fetched_at, data} rows spanning the
-    last `days` calendar days (inclusive of today).
+    last `days` calendar days (inclusive of today). Future-dated stubs are
+    excluded for the same reason as get_all_snapshots — the app sorts nights
+    newest-first, so an empty tomorrow would be the one it analyses.
     """
     with _lock, _conn() as conn:
         rows = conn.execute(
             """
             SELECT metric, day, payload, fetched_at FROM snapshots
-            WHERE day >= date('now', 'localtime', ?)
+            WHERE day >= ? AND day <= ?
             ORDER BY day DESC, metric ASC
             """,
-            (f"-{days - 1} days",),
+            (local_day_offset(days - 1), local_today()),
         ).fetchall()
     return [
         {
@@ -134,8 +143,8 @@ def prune(days: int) -> int:
     """Drop snapshot rows older than the retention window. Returns rows deleted."""
     with _lock, _conn() as conn:
         cur = conn.execute(
-            "DELETE FROM snapshots WHERE day < date('now', 'localtime', ?)",
-            (f"-{days - 1} days",),
+            "DELETE FROM snapshots WHERE day < ?",
+            (local_day_offset(days - 1),),
         )
         return cur.rowcount
 

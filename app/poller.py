@@ -1,9 +1,10 @@
 import logging
 import time
 import traceback
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 
 from . import db
+from .clock import local_today
 from .config import settings
 from .garmin_client import LoginRequired, get_client
 
@@ -11,7 +12,7 @@ log = logging.getLogger("poller")
 
 
 def _today() -> str:
-    return date.today().isoformat()
+    return local_today()
 
 
 def _safe(metric: str, day: str, fn) -> bool:
