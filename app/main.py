@@ -29,7 +29,10 @@ async def lifespan(_: FastAPI):
         "interval",
         minutes=settings.poll_interval_minutes,
         id="garmin_poll",
-        next_run_time=None,  # don't run immediately on boot
+        # No next_run_time override: APScheduler 3.x treats next_run_time=None as
+        # "add the job paused", so the interval never fired and data only landed
+        # on a manual POST /refresh. Letting it default also back-fills right
+        # after every redeploy/restart, which is what hands-off operation needs.
         max_instances=1,
         coalesce=True,
     )
