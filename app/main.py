@@ -31,13 +31,18 @@ async def lifespan(_: FastAPI):
         id="garmin_poll",
         # No next_run_time override: APScheduler 3.x treats next_run_time=None as
         # "add the job paused", so the interval never fired and data only landed
-        # on a manual POST /refresh. Letting it default also back-fills right
-        # after every redeploy/restart, which is what hands-off operation needs.
+        # on a manual POST /refresh.
         max_instances=1,
         coalesce=True,
     )
+    # IntervalTrigger defaults start_date to now + interval, so the job above
+    # first fires one interval after boot. This one-shot runs immediately (in the
+    # scheduler's own thread, off the request path) so a redeploy or restart
+    # refills the cache right away instead of leaving it stale for an interval.
+    scheduler.add_job(poller.poll_once, "date", id="garmin_poll_boot")
     scheduler.start()
-    log.info("scheduler started: every %s min", settings.poll_interval_minutes)
+    log.info("scheduler started: boot poll now, then every %s min",
+             settings.poll_interval_minutes)
     yield
     scheduler.shutdown(wait=False)
 
