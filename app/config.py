@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     # How many recent activities to pull each poll.
     activities_limit: int = 5
 
+    # Per-metric retry. Garmin's slower endpoints (get_stats especially) sometimes
+    # exceed garth's 10s read timeout; one retry a few seconds later almost always
+    # lands. Worst case stays far inside the poll interval.
+    metric_attempts: int = 2
+    retry_delay_seconds: int = 5
+
     # How many days of overnight history to retain (rolling window).
     # Each metric keeps one row per day; older rows are pruned after each poll.
     retention_days: int = 3

@@ -1,4 +1,5 @@
 import logging
+import time
 import traceback
 from datetime import date, datetime, timezone
 
@@ -14,14 +15,31 @@ def _today() -> str:
 
 
 def _safe(metric: str, day: str, fn) -> bool:
-    """Run one metric fetch; never let a single failure abort the poll."""
-    try:
-        payload = fn()
-        db.save_snapshot(metric, day, payload)
-        return True
-    except Exception:  # noqa: BLE001 - log and continue with other metrics
-        log.warning("metric %s failed:\n%s", metric, traceback.format_exc())
-        return False
+    """Run one metric fetch; never let a single failure abort the poll.
+
+    Retried per settings.metric_attempts: Garmin's slower endpoints (get_stats
+    especially) intermittently exceed garth's 10s read timeout, which used to
+    leave that metric's snapshot stale until the next poll.
+    """
+    attempts = max(1, settings.metric_attempts)
+    for attempt in range(1, attempts + 1):
+        try:
+            payload = fn()
+            db.save_snapshot(metric, day, payload)
+            if attempt > 1:
+                log.info("metric %s recovered on attempt %s", metric, attempt)
+            return True
+        except Exception:  # noqa: BLE001 - log and continue with other metrics
+            final = attempt == attempts
+            log.warning(
+                "metric %s failed (attempt %s/%s)%s:\n%s",
+                metric, attempt, attempts,
+                "" if final else " - retrying",
+                traceback.format_exc(),
+            )
+            if not final:
+                time.sleep(settings.retry_delay_seconds)
+    return False
 
 
 def poll_once() -> dict:
