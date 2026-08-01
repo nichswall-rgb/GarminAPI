@@ -138,8 +138,12 @@ def poll_once() -> dict:
     # splits and the HR-zone breakdown are fetched per activity. Only new ids
     # are fetched, and at most activity_details_per_poll of them, since each
     # call is far heavier than a daily snapshot.
+    # Kept OUT of `results`: that map is metric -> succeeded, and the steady
+    # state here is 0 new activities, which as a boolean would read as a failed
+    # metric and pin the status at "ok 10/11" forever.
+    new_activities = 0
     try:
-        results["activity_details"] = _fetch_activity_details(g)
+        new_activities = _fetch_activity_details(g)
     except Exception:  # noqa: BLE001 - detail is a bonus, never fail the poll
         log.warning("activity detail pass failed:\n%s", traceback.format_exc())
 
@@ -155,7 +159,14 @@ def poll_once() -> dict:
     ok = sum(1 for v in results.values() if v)
     total = len(results)
     status = f"ok {ok}/{total}"
+    if new_activities:
+        status += f" +{new_activities} activities"
     db.set_meta("last_status", status)
     db.set_meta("last_success", datetime.now(timezone.utc).isoformat())
     log.info("poll complete: %s", status)
-    return {"ok": True, "results": results, "status": status}
+    return {
+        "ok": True,
+        "results": results,
+        "new_activities": new_activities,
+        "status": status,
+    }
