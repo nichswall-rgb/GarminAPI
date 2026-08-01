@@ -43,6 +43,63 @@ def _safe(metric: str, day: str, fn) -> bool:
     return False
 
 
+def _fetch_activity_details(g) -> int:
+    """Fetch detail for activities we haven't stored yet. Returns how many.
+
+    `get_activities` gives a summary per activity; the per-point series behind
+    Garmin's own charts comes from `get_activity_details`, the lap structure
+    from `get_activity_splits`, and time-in-zone from
+    `get_activity_hr_in_timezones`. Each is best-effort per activity.
+    """
+    listing = g.get_activities(0, settings.activities_limit) or []
+    known = db.activity_ids_present()
+    fetched = 0
+    for a in listing:
+        if fetched >= settings.activity_details_per_poll:
+            break
+        aid = a.get("activityId")
+        if aid is None or str(aid) in known:
+            continue
+        start_local = a.get("startTimeLocal") or ""
+        try:
+            details = g.get_activity_details(
+                aid, maxchart=settings.activity_detail_maxchart
+            )
+        except Exception:  # noqa: BLE001 - store the summary even if detail fails
+            log.warning("activity %s details failed:\n%s", aid, traceback.format_exc())
+            details = None
+        splits = _try(lambda: g.get_activity_splits(aid), f"activity {aid} splits")
+        zones = _try(lambda: g.get_activity_hr_in_timezones(aid), f"activity {aid} zones")
+        db.save_activity(
+            activity_id=aid,
+            day=start_local[:10],
+            start_local=start_local,
+            activity_type=((a.get("activityType") or {}).get("typeKey") or ""),
+            name=a.get("activityName") or "",
+            summary=a,
+            details=details,
+            splits=splits,
+            hr_zones=zones,
+        )
+        fetched += 1
+        log.info("stored activity %s (%s) details=%s", aid, start_local, details is not None)
+
+    removed = db.prune_activities(settings.activity_retention_days)
+    if removed:
+        log.info("pruned %s activities past %s-day window",
+                 removed, settings.activity_retention_days)
+    return fetched
+
+
+def _try(fn, label: str):
+    """Best-effort sub-fetch: returns None instead of raising."""
+    try:
+        return fn()
+    except Exception:  # noqa: BLE001
+        log.warning("%s failed:\n%s", label, traceback.format_exc())
+        return None
+
+
 def poll_once() -> dict:
     """Pull all configured metrics from Garmin into the DB. Returns a summary."""
     day = _today()
@@ -75,6 +132,16 @@ def poll_once() -> dict:
             lambda: g.get_activities(0, settings.activities_limit),
         ),
     }
+
+    # Per-activity detail: the summary list carries distance and calories only,
+    # so the intraday series (HR, cadence, pace, running dynamics), the lap
+    # splits and the HR-zone breakdown are fetched per activity. Only new ids
+    # are fetched, and at most activity_details_per_poll of them, since each
+    # call is far heavier than a daily snapshot.
+    try:
+        results["activity_details"] = _fetch_activity_details(g)
+    except Exception:  # noqa: BLE001 - detail is a bonus, never fail the poll
+        log.warning("activity detail pass failed:\n%s", traceback.format_exc())
 
     # Keep the rolling retention window trimmed.
     try:

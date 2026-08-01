@@ -107,6 +107,26 @@ def metrics_latest():
     }
 
 
+@app.get("/activities", dependencies=[Depends(require_api_key)])
+def activities(days: int = 30):
+    """Recent activities WITHOUT the per-point series — a light index.
+
+    Use `/activities/{id}` for the intraday HR/cadence/pace series.
+    """
+    days = max(1, min(days, settings.activity_retention_days))
+    rows = db.get_activities(days)
+    return {"days": days, "count": len(rows), "activities": rows}
+
+
+@app.get("/activities/{activity_id}", dependencies=[Depends(require_api_key)])
+def activity(activity_id: str):
+    """One activity including its per-point series, splits and HR zones."""
+    row = db.get_activity(activity_id)
+    if row is None:
+        raise HTTPException(404, f"activity {activity_id} not stored")
+    return row
+
+
 @app.get("/metrics/history", dependencies=[Depends(require_api_key)])
 def metrics_history(days: int = settings.retention_days):
     """Retained overnight history for time-series analysis.

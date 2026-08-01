@@ -29,6 +29,15 @@ class Settings(BaseSettings):
     metric_attempts: int = 2
     retry_delay_seconds: int = 5
 
+    # Activity detail. Runs are sparse and stay useful long after the daily
+    # snapshots expire, so they get their own retention. detail_maxchart caps
+    # the per-point series Garmin returns (its own charts use 2000).
+    activity_retention_days: int = 90
+    activity_detail_maxchart: int = 2000
+    # Cap the heavy per-activity fetches done in a single poll, so one backfill
+    # can't stall a poll or hammer Garmin.
+    activity_details_per_poll: int = 3
+
     # How many days of overnight history to retain (rolling window).
     # Each metric keeps one row per day; older rows are pruned after each poll.
     retention_days: int = 3

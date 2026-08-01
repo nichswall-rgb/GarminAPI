@@ -38,6 +38,26 @@ def init_db() -> None:
             )
             """
         )
+        # Activities live outside the rolling snapshot window: they are sparse,
+        # each one is far bigger than a daily snapshot, and a run stays worth
+        # analysing long after three days.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS activities (
+                activity_id   TEXT PRIMARY KEY,
+                day           TEXT,
+                start_local   TEXT,
+                activity_type TEXT,
+                name          TEXT,
+                summary       TEXT,
+                details       TEXT,
+                splits        TEXT,
+                hr_zones      TEXT,
+                fetched_at    TEXT
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_activities_day ON activities (day DESC)")
         _migrate_snapshots_pk(conn)
 
 
@@ -145,6 +165,93 @@ def prune(days: int) -> int:
         cur = conn.execute(
             "DELETE FROM snapshots WHERE day < ?",
             (local_day_offset(days - 1),),
+        )
+        return cur.rowcount
+
+
+# ── activities ──────────────────────────────────────────────────────────────
+
+
+def activity_ids_present() -> set:
+    """Ids already stored WITH details — used to skip re-fetching heavy payloads."""
+    with _lock, _conn() as conn:
+        rows = conn.execute(
+            "SELECT activity_id FROM activities WHERE details IS NOT NULL AND details != ''"
+        ).fetchall()
+    return {r["activity_id"] for r in rows}
+
+
+def save_activity(
+    activity_id: str,
+    day: str,
+    start_local: str,
+    activity_type: str,
+    name: str,
+    summary,
+    details=None,
+    splits=None,
+    hr_zones=None,
+) -> None:
+    with _lock, _conn() as conn:
+        conn.execute(
+            """
+            REPLACE INTO activities
+                (activity_id, day, start_local, activity_type, name,
+                 summary, details, splits, hr_zones, fetched_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(activity_id), day, start_local, activity_type, name,
+                json.dumps(summary),
+                json.dumps(details) if details is not None else None,
+                json.dumps(splits) if splits is not None else None,
+                json.dumps(hr_zones) if hr_zones is not None else None,
+                _now(),
+            ),
+        )
+
+
+def _activity_row(r, with_details: bool) -> dict:
+    out = {
+        "activity_id": r["activity_id"],
+        "day": r["day"],
+        "start_local": r["start_local"],
+        "activity_type": r["activity_type"],
+        "name": r["name"],
+        "fetched_at": r["fetched_at"],
+        "summary": json.loads(r["summary"]) if r["summary"] else None,
+        "splits": json.loads(r["splits"]) if r["splits"] else None,
+        "hr_zones": json.loads(r["hr_zones"]) if r["hr_zones"] else None,
+        "has_details": bool(r["details"]),
+    }
+    if with_details:
+        out["details"] = json.loads(r["details"]) if r["details"] else None
+    return out
+
+
+def get_activities(days: int) -> list:
+    """Recent activities, newest first, WITHOUT the heavy per-point series."""
+    with _lock, _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM activities WHERE day >= ? ORDER BY start_local DESC",
+            (local_day_offset(max(0, days - 1)),),
+        ).fetchall()
+    return [_activity_row(r, with_details=False) for r in rows]
+
+
+def get_activity(activity_id: str) -> dict | None:
+    """One activity including its per-point series."""
+    with _lock, _conn() as conn:
+        r = conn.execute(
+            "SELECT * FROM activities WHERE activity_id = ?", (str(activity_id),)
+        ).fetchone()
+    return _activity_row(r, with_details=True) if r else None
+
+
+def prune_activities(days: int) -> int:
+    with _lock, _conn() as conn:
+        cur = conn.execute(
+            "DELETE FROM activities WHERE day < ?", (local_day_offset(days - 1),)
         )
         return cur.rowcount
 
