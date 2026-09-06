@@ -159,6 +159,17 @@ def get_history(days: int) -> list:
     ]
 
 
+def days_with_data() -> set:
+    """Distinct days that already hold at least one snapshot.
+
+    Lets backfill skip days it has already fetched, so re-running it after an
+    interruption costs only the missing days rather than the whole range.
+    """
+    with _lock, _conn() as conn:
+        rows = conn.execute("SELECT DISTINCT day FROM snapshots").fetchall()
+    return {r["day"] for r in rows}
+
+
 def prune(days: int) -> int:
     """Drop snapshot rows older than the retention window. Returns rows deleted."""
     with _lock, _conn() as conn:
