@@ -1,3 +1,4 @@
+import json
 import logging
 from contextlib import asynccontextmanager
 
@@ -5,7 +6,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
-from . import db, garmin_client, poller
+from . import clock, db, garmin_client, poller
 from .config import settings
 
 logging.basicConfig(level=logging.INFO)
@@ -125,6 +126,52 @@ def activity(activity_id: str):
     if row is None:
         raise HTTPException(404, f"activity {activity_id} not stored")
     return row
+
+
+@app.post("/backfill", dependencies=[Depends(require_api_key)])
+def backfill(days: int = 30, force: bool = False):
+    """Populate history for the last `days` days from Garmin, in the background.
+
+    The poller only ever fetches today, so without this the retention window fills
+    one day at a time. Garmin retains years, so a new deployment (or a widened
+    window) can be filled immediately instead.
+
+    Returns straight away with the accepted range: a full 30-day run is ~390
+    Garmin calls with a deliberate pause between days, far longer than an HTTP
+    request should live. Poll GET /backfill/status for progress.
+
+    `days` is clamped to the retention window — prune() deletes anything older
+    after every poll, so fetching deeper would just feed the pruner.
+    `force=true` re-fetches days already stored (default skips them).
+    """
+    limit = min(settings.backfill_max_days, settings.retention_days)
+    days = max(1, min(days, limit))
+    start = clock.local_day_offset(days - 1)
+    end = clock.local_today()
+
+    if db.get_meta("backfill_status") == "running":
+        raise HTTPException(409, "A backfill is already running. See GET /backfill/status.")
+
+    # Off the request path, in the scheduler's own thread — same pattern as the
+    # boot poll. APScheduler needs a unique id per one-shot job.
+    scheduler.add_job(
+        poller.backfill_range,
+        "date",
+        args=[start, end, force],
+        id=f"garmin_backfill_{end}_{start}",
+        replace_existing=True,
+    )
+    return {"accepted": True, "start": start, "end": end, "days": days, "force": force}
+
+
+@app.get("/backfill/status", dependencies=[Depends(require_api_key)])
+def backfill_status():
+    """Progress of the most recent backfill: idle | running | done | failed."""
+    raw = db.get_meta("backfill_progress")
+    return {
+        "status": db.get_meta("backfill_status") or "idle",
+        "progress": json.loads(raw) if raw else None,
+    }
 
 
 @app.get("/metrics/history", dependencies=[Depends(require_api_key)])

@@ -31,11 +31,45 @@ All except `/health` require header `X-API-Key: <PROXY_API_KEY>`.
 | POST   | `/garmin/login`      | One-time bootstrap. Body or env: email/password.   |
 | POST   | `/garmin/login/mfa`  | Submit the 2FA code if login asked for one.         |
 | POST   | `/refresh`           | **Forced check-in** — poll Garmin now, return data. |
-| GET    | `/metrics/latest`    | Cached metrics for the app's 3-hour read.          |
+| GET    | `/metrics/latest`    | Cached metrics for the app's read.                 |
+| GET    | `/metrics/history`   | `?days=N` — retained daily snapshots for time-series analysis. |
+| POST   | `/backfill`          | `?days=N&force=` — fill history from Garmin in the background. |
+| GET    | `/backfill/status`   | Progress of the most recent backfill.              |
+| GET    | `/activities`        | `?days=N` — light activity index, no per-point series. |
+| GET    | `/activities/{id}`   | One activity with its series, splits and HR zones. |
 
-Metrics collected: daily stats, heart rate, steps, sleep, stress, body battery,
-and recent activities (exercise time, HR, distance, cadence, elevation, pace,
-calories).
+**Metrics collected (14 daily snapshots):** stats, heart rate, steps, sleep,
+stress, body battery, HRV, SpO2, respiration, training readiness, training
+status, max metrics (VO2 max / fitness age), body composition, and recent
+activities.
+
+Deliberately *not* collected, because `stats` already carries them and the
+consuming app should never gather the same measurement twice:
+`get_intensity_minutes_data` (→ `stats.moderateIntensityMinutes` /
+`vigorousIntensityMinutes`), `get_floors` (→ `stats.floorsAscended`),
+`get_all_day_stress` (→ covered by `stress` + `body_battery`).
+
+### Retention and backfill
+
+Daily snapshots are kept for **30 days** (`RETENTION_DAYS`); activities for 90
+(`ACTIVITY_RETENTION_DAYS`), since a run stays worth analysing long after the
+daily rows expire.
+
+The poller only ever fetches **today**, so a fresh deployment fills one day at a
+time. `POST /backfill?days=30` replays the same per-day fetchers across a past
+range so the window can be populated at once — Garmin retains years. It returns
+immediately and runs in the scheduler's thread; poll `GET /backfill/status`.
+
+`days` is clamped to the retention window on purpose: `prune()` runs after every
+poll, and its floor is exactly the oldest day backfill will fetch, so backfilled
+rows are never deleted out from under the app. Days already stored are skipped
+unless `force=true`.
+
+> **`TIMEZONE` must match your Garmin account's own timezone.** Every day
+> boundary — `local_today`, prune, and backfill ranges — is computed in it, while
+> Garmin attributes each day in the account's zone. Set to Eastern while the
+> account was Pacific, the date rolled over at 21:00 local and every poll until
+> midnight asked Garmin for a day that had not started yet, storing empty stubs.
 
 ## Deploy to Railway
 
